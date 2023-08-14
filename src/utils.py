@@ -17,6 +17,7 @@ import numpy as np
 import os
 import torch
 from nltk.stem import WordNetLemmatizer
+from sklearn.feature_extraction.text import CountVectorizer
 
 from src.dataset import Example
 from src.rule import lf
@@ -28,7 +29,8 @@ wordnet_lemmatizer = WordNetLemmatizer()
 def load_word_emb(file_name, use_small=False):
     print ('Loading word embedding from %s'%file_name)
     ret = {}
-    with open(file_name) as inf:
+    print(file_name)
+    with open(file_name, encoding="utf8") as inf: #SS encoding="utf-8"
         for idx, line in enumerate(inf):
             if (use_small and idx >= 500000):
                 break
@@ -234,6 +236,9 @@ def epoch_train(model, optimizer, batch_size, sql_data, table_data,
     perm=np.random.permutation(len(sql_data))
     cum_loss = 0.0
     st = 0
+    ## json_datas = [] #SS
+    ## sketch_correct, rule_label_correct, total = 0, 0, 0 #SS
+
     while st < len(sql_data):
         ed = st+batch_size if st+batch_size < len(perm) else len(perm)
         examples = to_batch_seq(sql_data, table_data, perm, st, ed)
@@ -242,22 +247,81 @@ def epoch_train(model, optimizer, batch_size, sql_data, table_data,
         score = model.forward(examples)
         loss_sketch = -score[0]
         loss_lf = -score[1]
+        loss_dist = score[2]
 
         loss_sketch = torch.mean(loss_sketch)
         loss_lf = torch.mean(loss_lf)
+        loss_dist = np.mean(loss_dist)
+        '''
+        for example in examples:
+            results_all = model.parse(example, beam_size=1)
+            results = results_all[0]
+            list_preds = []
+            try:
 
-        if epoch > loss_epoch_threshold:
-            loss = loss_lf + sketch_loss_coefficient * loss_sketch
-        else:
-            loss = loss_lf + loss_sketch
+                pred = " ".join([str(x) for x in results[0].actions])
+                #print("SS: ", pred)
+                for x in results:
+                    list_preds.append(" ".join(str(x.actions)))
+            except Exception as e:
+                # print('Epoch Acc: ', e)
+                # print(results)
+                # print(results_all)
+                pred = ""
+
+            simple_json = example.sql_json['pre_sql']
+
+            simple_json['sketch_result'] =  " ".join(str(x) for x in results_all[1])
+            simple_json['model_result'] = pred
+
+            truth_sketch = " ".join([str(x) for x in example.sketch])
+            truth_rule_label = " ".join([str(x) for x in example.tgt_actions])
+            
+            #print('SS: sketch_result: ', simple_json['sketch_result'])
+            #print('SS: Truth sketch: ', truth_sketch)
+            complete_text = [simple_json['sketch_result'], truth_sketch]
+            count_vect = CountVectorizer()
+            count_matrix = count_vect.fit_transform(complete_text)
+            count_vect_array = count_matrix.toarray()
+            diff_sel = abs(complete_text[1].count('Sel') - complete_text[0].count('Sel'))/complete_text[1].count('Sel')
+            #print(count_vect_array)
+            #print("SS: Difference :")
+            eu_dist = np.linalg.norm(count_vect_array[1]-count_vect_array[0])
+            #print(diff_sel)
+            loss_dist += diff_sel * eu_dist/count_vect_array.shape[1]
+            
+            dist_loss_coefficient = 0
+        '''
+        dist_loss_coefficient = 1.0
+        #if epoch > loss_epoch_threshold:
+        loss = sketch_loss_coefficient * loss_lf + sketch_loss_coefficient * loss_sketch  + dist_loss_coefficient * loss_dist #SS
+        #else:
+        #    loss = loss_lf + loss_sketch + dist_loss_coefficient * loss_dist #SS
+
+        #print(loss_lf, loss_sketch, loss_dist)
+            
+        #print("SS: Total loss: ", loss)
 
         loss.backward()
         if args.clip_grad > 0.:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
         optimizer.step()
         cum_loss += loss.data.cpu().numpy()*(ed - st)
+        
+        '''
+        #SS
+        if truth_sketch == simple_json['sketch_result']:
+            sketch_correct += 1
+        if truth_rule_label == simple_json['model_result']:
+            rule_label_correct += 1
+        total += 1
+        #SS
+
+        json_datas.append(simple_json)
+        '''
         st = ed
-    return cum_loss / len(sql_data)
+        
+    return cum_loss / len(sql_data) #, json_datas, float(sketch_correct)/float(total), float(rule_label_correct)/float(total)
 
 def epoch_acc(model, batch_size, sql_data, table_data, beam_size=3):
     model.eval()
@@ -277,6 +341,7 @@ def epoch_acc(model, batch_size, sql_data, table_data, beam_size=3):
             try:
 
                 pred = " ".join([str(x) for x in results[0].actions])
+                #print("SS: ", pred)
                 for x in results:
                     list_preds.append(" ".join(str(x.actions)))
             except Exception as e:
@@ -292,6 +357,17 @@ def epoch_acc(model, batch_size, sql_data, table_data, beam_size=3):
 
             truth_sketch = " ".join([str(x) for x in example.sketch])
             truth_rule_label = " ".join([str(x) for x in example.tgt_actions])
+            '''
+            print('SS: sketch_result: ', simple_json['sketch_result'])
+            print('SS: Truth sketch: ', truth_sketch)
+            complete_text = [simple_json['sketch_result'], truth_sketch]
+            count_vect = CountVectorizer()
+            count_matrix = count_vect.fit_transform(complete_text)
+            count_vect_array = count_matrix.toarray()
+            print(count_vect_array)
+            print("SS: Difference :")
+            print(np.linalg.norm(count_vect_array[1]-count_vect_array[0]))
+            '''
 
             if truth_sketch == simple_json['sketch_result']:
                 sketch_correct += 1
@@ -301,15 +377,21 @@ def epoch_acc(model, batch_size, sql_data, table_data, beam_size=3):
 
             json_datas.append(simple_json)
         st = ed
+        
     return json_datas, float(sketch_correct)/float(total), float(rule_label_correct)/float(total)
 
 def eval_acc(preds, sqls):
-    sketch_correct, best_correct = 0, 0
+    sketch_correct, best_correct, total_nested, nested_correct = 0, 0, 0, 0
     for i, (pred, sql) in enumerate(zip(preds, sqls)):
+        nested = True if sql['rule_label'].count('Sel') > 1 else 0
+        if nested:
+            total_nested += 1
         if pred['model_result'] == sql['rule_label']:
             best_correct += 1
-    print(best_correct / len(preds))
-    return best_correct / len(preds)
+            if nested:
+                nested_correct += 1
+    print(best_correct / len(preds), nested_correct/total_nested)
+    return best_correct / len(preds), nested_correct/total_nested
 
 
 def load_data_new(sql_path, table_data, use_small=False):

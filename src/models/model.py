@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.utils
 from torch.autograd import Variable
+from sklearn.feature_extraction.text import CountVectorizer
 
 from src.beam import Beams, ActionInfo
 from src.dataset import Batch
@@ -126,6 +127,19 @@ class IRNet(BasicModel):
 
         sketch_attention_history = list()
 
+        expected_sketch_ids = [[] for _ in examples]
+        output_sketch_ids = [[] for _ in examples]
+
+        expected_sketch = [[] for _ in examples]
+        output_sketch = [[] for _ in examples]
+
+        expected_table_ids = [[] for _ in examples]
+        output_table_ids = [[] for _ in examples]
+
+        expected_tokens = [[] for _ in examples]
+        output_tokens = [[] for _ in examples]
+
+
         for t in range(batch.max_sketch_num):
             if t == 0:
                 x = Variable(self.new_tensor(len(batch), self.sketch_decoder_lstm.input_size).zero_(),
@@ -184,16 +198,29 @@ class IRNet(BasicModel):
 
             # get the Root possibility
             apply_rule_prob = F.softmax(self.production_readout(att_t), dim=-1)
-
             for e_id, example in enumerate(examples):
                 if t < len(example.sketch):
                     action_t = example.sketch[t]
                     act_prob_t_i = apply_rule_prob[e_id, self.grammar.prod2id[action_t.production]]
+                    #print("SS: index expected = ", self.grammar.prod2id[action_t.production])
+                    #print("SS: index max prob = ", torch.argmax(apply_rule_prob[e_id]))
+                    #print("SS: probabilities = ", apply_rule_prob[e_id])
+                    #print("SS: expected action  = ", action_t.production)
+                    #print("SS: action with max prob = ", self.grammar.id2prod[torch.argmax(apply_rule_prob[e_id]).item()])
                     action_probs[e_id].append(act_prob_t_i)
+                    expected_sketch_ids[e_id].append(self.grammar.prod2id[action_t.production])
+                    output_sketch_ids[e_id].append(torch.argmax(apply_rule_prob[e_id]).item())
+                    expected_sketch[e_id].append(action_t.production)
+                    output_sketch[e_id].append(self.grammar.id2prod[torch.argmax(apply_rule_prob[e_id]).item()])
 
             h_tm1 = (h_t, cell_t)
             att_tm1 = att_t
 
+        #print("SS: Expected IDs = ", expected_sketch_ids)
+        #print("SS: Model Output IDs = ", output_sketch_ids )
+        #print("SS: Expected = ", expected_sketch)
+        #print("SS: Model Output = ", output_sketch )
+        #loss_dist = np.mean([abs(x.count('Sel N') - y.count('Sel N')) for x,y in zip(expected_sketch,output_sketch)])
         sketch_prob_var = torch.stack(
             [torch.stack(action_probs_i, dim=0).log().sum() for action_probs_i in action_probs], dim=0)
 
@@ -266,6 +293,7 @@ class IRNet(BasicModel):
                     else:
                         a_tm1_embed = zero_action_embed
                     a_tm1_embeds.append(a_tm1_embed)
+                    
 
                 a_tm1_embeds = torch.stack(a_tm1_embeds)
 
@@ -333,20 +361,59 @@ class IRNet(BasicModel):
                         table_enable[e_id] = action_t.id_c
                         act_prob_t_i = column_attention_weights[e_id, action_t.id_c]
                         action_probs[e_id].append(act_prob_t_i)
+                        expected_tokens[e_id].append(str(define_rule.C(action_t.id_c)))
+                        output_tokens[e_id].append(str(define_rule.C(torch.argmax(table_weights[e_id]).item())))
                     elif isinstance(action_t, define_rule.T):
                         act_prob_t_i = table_weights[e_id, action_t.id_c]
                         action_probs[e_id].append(act_prob_t_i)
+                        expected_table_ids[e_id].append(action_t.id_c)
+                        output_table_ids[e_id].append(torch.argmax(table_weights[e_id]).item())
+                        expected_tokens[e_id].append(str(define_rule.T(action_t.id_c)))
+                        output_tokens[e_id].append(str(define_rule.T(torch.argmax(table_weights[e_id]).item())))
                     elif isinstance(action_t, define_rule.A):
                         act_prob_t_i = apply_rule_prob[e_id, self.grammar.prod2id[action_t.production]]
                         action_probs[e_id].append(act_prob_t_i)
+                        expected_tokens[e_id].append(action_t.production)
+                        output_tokens[e_id].append(self.grammar.id2prod[torch.argmax(apply_rule_prob[e_id]).item()])
                     else:
                         pass
             h_tm1 = (h_t, cell_t)
             att_tm1 = att_t
+        #print("SS: Expected Table IDs = ", expected_table_ids)
+        #print("SS: Model Output Table IDs = ", output_table_ids )
+        #print("SS: Expected Tokens = ", expected_tokens)
+        #print("SS: Model Output Tokens = ", output_tokens )
+        
+        sel_diff = np.array([abs(x.count('Sel N') - y.count('Sel N'))/x.count('Sel N') for x,y in zip(expected_sketch,output_sketch)])
+        sel_count_diff = np.array([abs(x.count('Sel N') - y.count('Sel N'))/x.count('Sel N') for x,y in zip(expected_sketch,output_sketch)])
+        tables_count_diff = np.array([abs(len(set(x)) - len(set(y)))/len(set(x)) for x,y in zip(expected_table_ids, output_table_ids)])
+        tokens_list = []
+        for i in range(len(expected_tokens)):
+            tokens_list.extend(expected_tokens[i])
+        all_tokens = set(tokens_list)
+
+        expected_tokens_list = [' '.join(expected_tokens[idx]) for idx in range(len(expected_tokens))]
+        output_tokens_list = [' '.join(output_tokens[i]) for i in range(len(output_tokens))]
+
+        count_vect = CountVectorizer(vocabulary=all_tokens, lowercase=False, token_pattern = '[A-Z]+\(+[0-9]+\)+')
+        expected_matrix = count_vect.fit_transform(expected_tokens_list)
+        output_matrix = count_vect.fit_transform(output_tokens_list)
+        eu_dist = np.array([np.linalg.norm(expected_matrix.toarray()[i]-output_matrix.toarray()[i]) for i in range(len(expected_tokens))])
+        #print("SS: t_dist)
+        #loss_dist = sel_di s_dist = [(sel_di        #loss_dist = [(sel_diff[i] * tables_count_diff[i]) * np.linalg.norm(expected_matrix.toarray()[i] - output_matrix.toarray()[i]) for i in range(len(expected_tokens))]ff[i] * tables_count_diff[i]) * np.linalg.norm(expected_matrix.toarray()[i] - output_matrix.toarray()[i]) for i in range(len(expected_tokens))]
+        #loss_dist = sel_diff #[sel_diff * np.linalg.norm(expected_matrix.toarray()[i] - output_matrix.toarray()[i])for i in range(len(expected_tokens))]
+        #eu_dist_coeff = 0.05
+        #sel_diff_coeff = 0.75
+        #loss_dist = [eu_dist[i] for i in range(len(expected_tokens))]
+        #print("SS: matrix shapes : ", len(all_tokens), expected_matrix.shape, output_matrix.shape)
+        
+        loss_dist = [sel_diff[i] * eu_dist[i] for i in range(len(expected_tokens))]
+
+        #print("SS: dist loss : ", loss_dist)
         lf_prob_var = torch.stack(
             [torch.stack(action_probs_i, dim=0).log().sum() for action_probs_i in action_probs], dim=0)
 
-        return [sketch_prob_var, lf_prob_var]
+        return [sketch_prob_var, lf_prob_var, loss_dist]
 
     def parse(self, examples, beam_size=5):
         """
