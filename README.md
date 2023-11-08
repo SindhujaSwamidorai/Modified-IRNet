@@ -1,58 +1,8 @@
 # Modified-IRNet
-
-## Environment Setup
-
-* `Python3.6`
-* `Pytorch 0.4.0` or higher
-
-Install Python dependency via `pip install -r requirements.txt` when the environment of Python and Pytorch is setup.
-
-## Running Code
-
-#### Data preparation
-
-
-* Download [Glove Embedding](https://nlp.stanford.edu/data/wordvecs/glove.42B.300d.zip) and put `glove.42B.300d` under `./data/` directory
-* Download [Pretrained IRNet](https://drive.google.com/open?id=1VoV28fneYss8HaZmoThGlvYU3A-aK31q) and put `
-IRNet_pretrained.model` under `./saved_model/` directory
-* Download preprocessed train/dev datasets from [here](https://drive.google.com/open?id=1YFV1GoLivOMlmunKW0nkzefKULO4wtrn) and put `train.json`, `dev.json` and 
-`tables.json` under `./data/` directory
-
-##### Generating train/dev data by yourself
-You could process the origin [Spider Data](https://drive.google.com/uc?export=download&id=11icoH_EA-NYb0OrPTdehRWm_d7-DIzWX) by your own. Download  and put `train.json`, `dev.json` and 
-`tables.json` under `./data/` directory and follow the instruction on `./preprocess/`
-
-#### Training
-
-Run `train.sh` to train IRNet.
-
-`sh train.sh [GPU_ID] [SAVE_FOLD]`
-
-#### Testing
-
-Run `eval.sh` to eval IRNet.
-
-`sh eval.sh [GPU_ID] [OUTPUT_FOLD]`
-
-
-#### Evaluation
-
-You could follow the general evaluation process in [Spider Page](https://github.com/taoyds/spider)
-
+Follow guidelines in IRNet
 
 ## Results
 ---
 
 ## Citation
-
-Citation for Base Model IRNet, 
-
-```
-@inproceedings{GuoIRNet2019,
-  author={Jiaqi Guo and Zecheng Zhan and Yan Gao and Yan Xiao and Jian-Guang Lou and Ting Liu and Dongmei Zhang},
-  title={Towards Complex Text-to-SQL in Cross-Domain Database with Intermediate Representation},
-  booktitle={Proceeding of the 57th Annual Meeting of the Association for Computational Linguistics (ACL)},
-  year={2019},
-  organization={Association for Computational Linguistics}
-}
-```
+Please cite article https://link.springer.com/article/10.1007/s11042-023-16987-2
